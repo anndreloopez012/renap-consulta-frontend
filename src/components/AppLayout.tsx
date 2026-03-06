@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/stores/auth';
 import api from '@/lib/api';
-import { Search, ClipboardList, User, LogOut, Menu, X, Shield, Sparkles } from 'lucide-react';
+import { Search, ClipboardList, User, LogOut, Menu, X, Shield, Sparkles, Upload } from 'lucide-react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import {
   DropdownMenu,
@@ -16,17 +16,22 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { motion, AnimatePresence } from 'framer-motion';
 
-const navItems = [
+const BASE_NAV = [
   { label: 'Búsqueda', path: '/search', icon: Search },
   { label: 'Mis Consultas', path: '/logs', icon: ClipboardList },
   { label: 'Mi Perfil', path: '/profile', icon: User },
 ];
+
+const ADMIN_NAV = [{ label: 'Importar CSV', path: '/import', icon: Upload }];
 
 export function AppLayout() {
   const { user, jwt, clearAuth, setAuth } = useAuthStore();
   const location = useLocation();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const isAdmin = user?.role?.type === 'admin' || user?.role?.name === 'super-admin';
+  const navItems = isAdmin ? [...BASE_NAV, ...ADMIN_NAV] : BASE_NAV;
 
   useEffect(() => {
     if (jwt && !user) {
