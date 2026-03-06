@@ -279,7 +279,9 @@ function UsersTab() {
   const { data: users = [], isLoading: usersLoading } = useQuery({
     queryKey: ['mgmt-users'],
     queryFn: async () => {
-      const r = await api.get('/api/users?populate=role,company');
+      const r = await api.get('/api/users', {
+        params: { 'populate[0]': 'role', 'populate[1]': 'company' },
+      });
       return r.data as AppUser[];
     },
   });
