@@ -18,7 +18,7 @@ const queryClient = new QueryClient();
 function AdminRoute({ children }: { children: React.ReactNode }) {
   const user = useAuthStore((s) => s.user);
   if (!user) return null; // still loading — AppLayout will fetch user
-  const isAdmin = user.role?.type === "admin" || user.role?.name === "Super Admin";
+  const isAdmin = user.role?.type === "admin" || user.role?.name === "super-admin";
   if (!isAdmin) return <Navigate to="/search" replace />;
   return <>{children}</>;
 }
