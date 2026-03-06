@@ -13,7 +13,14 @@ import {
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, parseISO } from 'date-fns';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
-import { RefreshCw, LayoutDashboard } from 'lucide-react';
+import { RefreshCw, LayoutDashboard, ChevronRight, Users, ArrowLeft } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { UserLogsDialog } from '@/components/admin/UserLogsDialog';
 
 interface Company {
   id: number;
@@ -32,6 +39,7 @@ const fmtUSD = (n: number) =>
 export default function DashboardPage() {
   const now = new Date();
   const [month, setMonth] = useState(now.getMonth());
+  const [drillCompany, setDrillCompany] = useState<{ company: Company; count: number } | null>(null);
 
   const dateFrom = useMemo(() => startOfMonth(new Date(YEAR, month)), [month]);
   const dateTo = useMemo(() => endOfMonth(new Date(YEAR, month)), [month]);
@@ -250,9 +258,10 @@ export default function DashboardPage() {
                 : stats.map(({ company, count }) => (
                     <tr
                       key={company.id}
-                      className="border-b border-slate-800/40 hover:bg-slate-800/20 transition-colors"
+                      onClick={() => setDrillCompany({ company, count })}
+                      className="border-b border-slate-800/40 hover:bg-slate-800/30 cursor-pointer transition-colors group"
                     >
-                      <td className="px-5 py-3 text-sm text-white font-medium">{company.name}</td>
+                      <td className="px-5 py-3 text-sm text-white font-medium group-hover:text-indigo-300 transition-colors">{company.name}</td>
                       <td className="px-5 py-3 text-sm text-slate-400 text-right">
                         {fmtUSD(company.cost)}
                       </td>
@@ -261,6 +270,9 @@ export default function DashboardPage() {
                       </td>
                       <td className="px-5 py-3 text-sm text-emerald-400 text-right tabular-nums">
                         {fmtUSD(count * company.cost)}
+                      </td>
+                      <td className="px-3 py-3">
+                        <ChevronRight className="h-4 w-4 text-slate-600 group-hover:text-slate-400 transition-colors" />
                       </td>
                     </tr>
                   ))}
@@ -286,7 +298,133 @@ export default function DashboardPage() {
           <p className="px-5 py-10 text-center text-slate-500 text-sm">Sin datos para este período</p>
         )}
       </div>
+
+      <CompanyDrillDialog
+        entry={drillCompany}
+        fromISO={fromISO}
+        toISO={toISO}
+        onClose={() => setDrillCompany(null)}
+      />
     </div>
+  );
+}
+
+function CompanyDrillDialog({
+  entry,
+  fromISO,
+  toISO,
+  onClose,
+}: {
+  entry: { company: Company; count: number } | null;
+  fromISO: string;
+  toISO: string;
+  onClose: () => void;
+}) {
+  const [selectedUser, setSelectedUser] = useState<{ id: number; username: string } | null>(null);
+
+  const { data: users = [], isLoading: usersLoading } = useQuery({
+    queryKey: ['drill-users', entry?.company.id],
+    queryFn: async () => {
+      const r = await api.get('/api/users', {
+        params: {
+          'filters[company][id][$eq]': entry!.company.id,
+          'populate[0]': 'role',
+        },
+      });
+      return r.data as { id: number; username: string; email: string }[];
+    },
+    enabled: entry != null,
+  });
+
+  const { data: userStats = [], isLoading: statsLoading } = useQuery({
+    queryKey: ['drill-stats', entry?.company.id, fromISO, toISO, users.map((u) => u.id).join(',')],
+    queryFn: () =>
+      Promise.all(
+        users.map(async (u) => {
+          const r = await api.get('/api/info-logs', {
+            params: {
+              'filters[user][id][$eq]': u.id,
+              'filters[searchedAt][$gte]': fromISO,
+              'filters[searchedAt][$lte]': toISO,
+              'pagination[pageSize]': 1,
+              'pagination[withCount]': true,
+            },
+          });
+          return { ...u, count: (r.data.meta?.pagination?.total as number) ?? 0 };
+        }),
+      ).then((r) => r.sort((a, b) => b.count - a.count)),
+    enabled: users.length > 0,
+  });
+
+  const loading = usersLoading || statsLoading;
+
+  return (
+    <>
+      <Dialog open={entry != null && selectedUser == null} onOpenChange={(o) => !o && onClose()}>
+        <DialogContent className="bg-slate-900 border-slate-700 sm:max-w-xl flex flex-col max-h-[80vh]">
+          <DialogHeader>
+            <DialogTitle className="text-white flex items-center gap-2">
+              <Users className="h-4 w-4 text-slate-400" />
+              {entry?.company.name}
+              <span className="ml-auto text-xs font-normal text-slate-500">
+                {fmt(entry?.count ?? 0)} consultas en el período
+              </span>
+            </DialogTitle>
+            <p className="text-xs text-slate-500">Clic en un usuario para ver su historial detallado</p>
+          </DialogHeader>
+
+          <div className="overflow-y-auto flex-1 -mx-6 px-6">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-slate-900 z-10">
+                <tr className="border-b border-slate-800">
+                  <th className="px-3 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Usuario</th>
+                  <th className="px-3 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Email</th>
+                  <th className="px-3 py-2.5 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Consultas</th>
+                  <th className="px-2 py-2.5" />
+                </tr>
+              </thead>
+              <tbody>
+                {loading
+                  ? Array.from({ length: 4 }).map((_, i) => (
+                      <tr key={i} className="border-b border-slate-800/50">
+                        <td className="px-3 py-2.5"><Skeleton className="h-3 w-24" /></td>
+                        <td className="px-3 py-2.5"><Skeleton className="h-3 w-36" /></td>
+                        <td className="px-3 py-2.5 text-right"><Skeleton className="h-3 w-10 ml-auto" /></td>
+                        <td className="px-2 py-2.5" />
+                      </tr>
+                    ))
+                  : userStats.map((u) => (
+                      <tr
+                        key={u.id}
+                        onClick={() => setSelectedUser({ id: u.id, username: u.username })}
+                        className="border-b border-slate-800/40 hover:bg-slate-800/30 cursor-pointer transition-colors group"
+                      >
+                        <td className="px-3 py-2.5 text-sm text-white font-medium group-hover:text-indigo-300 transition-colors">{u.username}</td>
+                        <td className="px-3 py-2.5 text-xs text-slate-400">{u.email}</td>
+                        <td className="px-3 py-2.5 text-sm text-blue-400 text-right tabular-nums">{fmt(u.count)}</td>
+                        <td className="px-2 py-2.5">
+                          <ChevronRight className="h-4 w-4 text-slate-600 group-hover:text-slate-400 transition-colors" />
+                        </td>
+                      </tr>
+                    ))}
+              </tbody>
+            </table>
+            {!loading && userStats.length === 0 && (
+              <p className="py-10 text-center text-slate-500 text-sm">Sin usuarios registrados</p>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <UserLogsDialog
+        userId={selectedUser?.id ?? null}
+        username={selectedUser?.username ?? ''}
+        fromISO={fromISO}
+        toISO={toISO}
+        open={selectedUser != null}
+        onClose={() => setSelectedUser(null)}
+      />
+    </>
   );
 }
 

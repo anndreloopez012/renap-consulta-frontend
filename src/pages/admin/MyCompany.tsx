@@ -20,7 +20,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Building2 } from 'lucide-react';
+import { Building2, ChevronRight } from 'lucide-react';
+import { UserLogsDialog } from '@/components/admin/UserLogsDialog';
 
 interface Company {
   id: number;
@@ -49,6 +50,7 @@ export default function MyCompanyPage() {
   const now = new Date();
   const [month, setMonth] = useState(now.getMonth());
   const [selectedCompanyId, setSelectedCompanyId] = useState<number | null>(null);
+  const [selectedUser, setSelectedUser] = useState<{ id: number; username: string } | null>(null);
 
   const dateFrom = useMemo(() => startOfMonth(new Date(YEAR, month)), [month]);
   const dateTo = useMemo(() => endOfMonth(new Date(YEAR, month)), [month]);
@@ -303,10 +305,17 @@ export default function MyCompanyPage() {
                     </tr>
                   ))
                 : userStats.map((u) => (
-                    <tr key={u.id} className="border-b border-slate-800/40 hover:bg-slate-800/20 transition-colors">
-                      <td className="px-5 py-3 text-sm text-white font-medium">{u.username}</td>
+                    <tr
+                      key={u.id}
+                      onClick={() => setSelectedUser({ id: u.id, username: u.username })}
+                      className="border-b border-slate-800/40 hover:bg-slate-800/30 cursor-pointer transition-colors group"
+                    >
+                      <td className="px-5 py-3 text-sm text-white font-medium group-hover:text-indigo-300 transition-colors">{u.username}</td>
                       <td className="px-5 py-3 text-sm text-slate-400">{u.email}</td>
                       <td className="px-5 py-3 text-sm text-blue-400 text-right tabular-nums">{fmt(u.count)}</td>
+                      <td className="px-3 py-3 text-right">
+                        <ChevronRight className="h-4 w-4 text-slate-600 group-hover:text-slate-400 transition-colors ml-auto" />
+                      </td>
                     </tr>
                   ))}
             </tbody>
@@ -316,6 +325,15 @@ export default function MyCompanyPage() {
           <p className="px-5 py-10 text-center text-slate-500 text-sm">Sin usuarios registrados</p>
         )}
       </div>
+
+      <UserLogsDialog
+        userId={selectedUser?.id ?? null}
+        username={selectedUser?.username ?? ''}
+        fromISO={fromISO}
+        toISO={toISO}
+        open={selectedUser != null}
+        onClose={() => setSelectedUser(null)}
+      />
     </div>
   );
 }
