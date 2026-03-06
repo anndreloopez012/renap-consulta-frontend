@@ -186,12 +186,12 @@ export default function MyCompanyPage() {
         </div>
       </div>
 
-      {/* Company selector (super_admin only) */}
-      {isSuperAdmin && companies.length > 0 && (
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
-            Empresa
-          </p>
+      {/* Company — selector para super_admin, solo lectura para los demás */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
+          Empresa
+        </p>
+        {isSuperAdmin ? (
           <Select
             value={String(companyId ?? companies[0]?.id)}
             onValueChange={(v) => setSelectedCompanyId(Number(v))}
@@ -207,8 +207,16 @@ export default function MyCompanyPage() {
               ))}
             </SelectContent>
           </Select>
-        </div>
-      )}
+        ) : (
+          <div className="flex items-center gap-2.5">
+            <Building2 className="h-4 w-4 text-purple-400 shrink-0" />
+            <span className="text-white font-medium">
+              {activeCompany?.name ?? '—'}
+            </span>
+            <span className="text-xs text-slate-600 ml-1">(tu empresa)</span>
+          </div>
+        )}
+      </div>
 
       {/* Month selector */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
