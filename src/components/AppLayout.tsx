@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/stores/auth';
 import api from '@/lib/api';
-import { Search, ClipboardList, User, LogOut, Menu, X, Shield, Sparkles, Upload } from 'lucide-react';
+import { Search, ClipboardList, User, LogOut, Menu, X, Shield, Upload, LayoutDashboard, Building2, Settings2 } from 'lucide-react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import {
   DropdownMenu,
@@ -22,7 +22,15 @@ const BASE_NAV = [
   { label: 'Mi Perfil', path: '/profile', icon: User },
 ];
 
-const ADMIN_NAV = [{ label: 'Importar CSV', path: '/import', icon: Upload }];
+const ADMIN_NAV = [
+  { label: 'Importar CSV', path: '/import', icon: Upload },
+  { label: 'Dashboard Mi Empresa', path: '/admin/my-company', icon: Building2 },
+];
+
+const SUPER_ADMIN_NAV = [
+  { label: 'Dashboard Global', path: '/admin/dashboard', icon: LayoutDashboard },
+  { label: 'Gestión', path: '/admin/management', icon: Settings2 },
+];
 
 export function AppLayout() {
   const { user, jwt, clearAuth, setAuth } = useAuthStore();
@@ -30,8 +38,13 @@ export function AppLayout() {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  const isAdmin = user?.role?.type === 'admin' || user?.role?.name === 'super-admin';
-  const navItems = isAdmin ? [...BASE_NAV, ...ADMIN_NAV] : BASE_NAV;
+  const isAdmin = user?.role?.type === 'admin' || user?.role?.type === 'super_admin';
+  const isSuperAdmin = user?.role?.type === 'super_admin';
+  const navItems = [
+    ...BASE_NAV,
+    ...(isAdmin ? ADMIN_NAV : []),
+    ...(isSuperAdmin ? SUPER_ADMIN_NAV : []),
+  ];
 
   useEffect(() => {
     if (jwt && !user) {

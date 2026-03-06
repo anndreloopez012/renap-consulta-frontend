@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Search as SearchIcon, Cake, Mail, Phone, MapPin, Database } from 'lucide-react';
+import { Search as SearchIcon, Cake, Mail, Phone, MapPin, Database, Globe, Home } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { motion } from 'framer-motion';
@@ -34,8 +34,32 @@ const WS_FIELDS = [
   { key: 'WS_MINECO', label: 'MINECO' },
 ] as const;
 
+function InfoRow({
+  icon: Icon,
+  color,
+  label,
+  value,
+}: {
+  icon: React.ElementType;
+  color: string;
+  label: string;
+  value: string | null | undefined;
+}) {
+  return (
+    <div className="flex items-start gap-2.5">
+      <div className={`w-7 h-7 rounded-lg ${color} flex items-center justify-center shrink-0 mt-0.5`}>
+        <Icon className="h-3.5 w-3.5" />
+      </div>
+      <div className="min-w-0">
+        <p className="text-[10px] text-muted-foreground/60 uppercase tracking-wider leading-tight">{label}</p>
+        <p className="text-sm text-foreground break-words">{value || '—'}</p>
+      </div>
+    </div>
+  );
+}
+
 function ResultCard({ record, index }: { record: InfoRecord; index: number }) {
-  const residence = [record.MUNIC_RESIDENCIA, record.DEPTO_RESIDENCIA].filter(Boolean).join(', ') || '—';
+  const municipality = [record.MUNIC_RESIDENCIA, record.DEPTO_RESIDENCIA].filter(Boolean).join(', ') || null;
 
   return (
     <motion.div
@@ -44,43 +68,50 @@ function ResultCard({ record, index }: { record: InfoRecord; index: number }) {
       transition={{ delay: index * 0.05, duration: 0.3 }}
       className="glass rounded-xl p-5 card-shine hover:shadow-[var(--shadow-card-hover)] hover:border-primary/20 transition-all duration-300 group"
     >
-      <div className="mb-3">
-        <h3 className="font-bold text-base group-hover:text-primary transition-colors">{formatFullName(record) || '—'}</h3>
-        <Badge variant="secondary" className="mt-1.5 font-mono text-xs bg-muted/50 border-0">{record.CUI || '—'}</Badge>
+      {/* Header */}
+      <div className="mb-4">
+        <h3 className="font-bold text-base group-hover:text-primary transition-colors leading-tight">
+          {formatFullName(record) || '—'}
+        </h3>
+        <Badge variant="secondary" className="mt-1.5 font-mono text-xs bg-muted/50 border-0">
+          {record.CUI || '—'}
+        </Badge>
       </div>
-      <div className="space-y-2.5 text-sm">
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-warning/10 flex items-center justify-center shrink-0">
-            <Cake className="h-3.5 w-3.5 text-warning" />
-          </div>
-          <span className="text-foreground">{formatDate(record.FECHA_NACIMIENTO)}</span>
-        </div>
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-            <Mail className="h-3.5 w-3.5 text-primary" />
-          </div>
-          <span className="text-foreground truncate">{record.CORREO_ELECTRONICO || '—'}</span>
-        </div>
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-success/10 flex items-center justify-center shrink-0">
-            <Phone className="h-3.5 w-3.5 text-success" />
-          </div>
-          <span className="text-foreground">{record.TELEFONO || '—'}</span>
-        </div>
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-destructive/10 flex items-center justify-center shrink-0">
-            <MapPin className="h-3.5 w-3.5 text-destructive" />
-          </div>
-          <span className="text-foreground">{residence}</span>
-        </div>
+
+      {/* Info rows */}
+      <div className="space-y-3 text-sm">
+        <InfoRow icon={Cake}   color="bg-warning/10 text-warning"     label="Fecha de nacimiento" value={formatDate(record.FECHA_NACIMIENTO)} />
+        <InfoRow icon={Mail}   color="bg-primary/10 text-primary"     label="Correo electrónico"  value={record.CORREO_ELECTRONICO} />
+        <InfoRow icon={Phone}  color="bg-success/10 text-success"     label="Teléfono"            value={record.TELEFONO} />
+        <InfoRow icon={Home}   color="bg-violet-500/10 text-violet-400" label="Dirección"          value={record.DIRECCION} />
+        <InfoRow icon={MapPin} color="bg-destructive/10 text-destructive" label="Municipio / Departamento" value={municipality} />
+        <InfoRow icon={Globe}  color="bg-sky-500/10 text-sky-400"     label="País de residencia"  value={record.PAIS_RESIDENCIA} />
       </div>
-      <div className="flex gap-3 mt-4 pt-3 border-t border-border/30">
-        {WS_FIELDS.map((ws) => (
-          <div key={ws.key} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <div className={`h-2 w-2 rounded-full transition-all ${record[ws.key] != null ? 'bg-success shadow-sm shadow-success/50' : 'bg-muted-foreground/20'}`} />
-            {ws.label}
-          </div>
-        ))}
+
+      {/* WS Registros */}
+      <div className="mt-4 pt-3 border-t border-border/30">
+        <p className="text-[10px] text-muted-foreground/60 uppercase tracking-wider mb-2">Registros en sistemas</p>
+        <div className="grid grid-cols-2 gap-1.5">
+          {WS_FIELDS.map((ws) => {
+            const val = record[ws.key];
+            const active = val === 'SI';
+            return (
+              <div
+                key={ws.key}
+                className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium ${
+                  active
+                    ? 'bg-success/10 text-success'
+                    : 'bg-muted/30 text-muted-foreground'
+                }`}
+              >
+                <span>{ws.label}</span>
+                <span className={`font-bold ${active ? 'text-success' : 'text-muted-foreground/50'}`}>
+                  {val ?? '—'}
+                </span>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </motion.div>
   );
