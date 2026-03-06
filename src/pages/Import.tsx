@@ -38,7 +38,7 @@ const CSV_COLUMNS = [
   'WS_MINECO',
 ];
 
-type ImportStatus = 'idle' | 'importing' | 'complete' | 'error';
+type UploadPhase = 'idle' | 'uploading' | 'processing' | 'complete' | 'error';
 
 interface ImportStats {
   processed: number;
@@ -90,7 +90,7 @@ export default function ImportPage() {
   const [encoding, setEncoding] = useState('auto');
 
   // Import state
-  const [status, setStatus] = useState<ImportStatus>('idle');
+  const [status, setStatus] = useState<UploadPhase>('idle');
   const [stats, setStats] = useState<ImportStats>(EMPTY_STATS);
   const [log, setLog] = useState<LogEntry[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
@@ -160,7 +160,8 @@ export default function ImportPage() {
     const controller = new AbortController();
     abortRef.current = controller;
 
-    setStatus('importing');
+    // Phase 1: uploading (file is being sent to the server)
+    setStatus('uploading');
     setStats(EMPTY_STATS);
     setLog([]);
     setErrorMessage('');
@@ -169,12 +170,21 @@ export default function ImportPage() {
     formData.append('file', file);
     formData.append('delimiter', delimiter);
     formData.append('encoding', encoding);
+    // NOTE: NO Content-Type header — browser sets it automatically with the correct boundary
 
     let completed = false;
+
+    const failWith = (msg: string) => {
+      setErrorMessage(msg);
+      addLog('error', msg);
+      setStatus('error');
+    };
 
     const handleEvent = (event: Record<string, unknown>) => {
       switch (event.type) {
         case 'start':
+          // Phase 2: first SSE event received — server is now processing rows
+          setStatus('processing');
           addLog('start', String(event.message ?? 'Importación iniciada'));
           break;
 
@@ -219,9 +229,7 @@ export default function ImportPage() {
 
         case 'error': {
           const msg = String(event.message ?? 'Error desconocido');
-          setErrorMessage(msg);
-          addLog('error', msg);
-          setStatus('error');
+          failWith(msg);
           completed = true;
           break;
         }
@@ -236,23 +244,28 @@ export default function ImportPage() {
         signal: controller.signal,
       });
 
+      // Case A: HTTP error before stream starts (400, 403, 502, 413…)
       if (!response.ok) {
-        let msg = 'Error al iniciar la importación';
-        try {
-          const data = await response.json();
-          msg = data?.error?.message ?? data?.message ?? msg;
-        } catch {}
-        setErrorMessage(msg);
-        setStatus('error');
-        addLog('error', msg);
+        let msg = `Error del servidor (${response.status})`;
+        if (response.status === 502 || response.status === 503) {
+          msg =
+            'El servidor no pudo procesar el archivo. Si el archivo es muy grande, espera un momento y vuelve a intentar.';
+        } else if (response.status === 403) {
+          msg = 'No tienes permisos para importar datos.';
+        } else if (response.status === 413) {
+          msg = 'El archivo es demasiado grande para el servidor.';
+        } else {
+          try {
+            const data = await response.json();
+            msg = data?.error?.message ?? data?.message ?? msg;
+          } catch {}
+        }
+        failWith(msg);
         return;
       }
 
       if (!response.body) {
-        const msg = 'El servidor no retornó un stream válido';
-        setErrorMessage(msg);
-        setStatus('error');
-        addLog('error', msg);
+        failWith('El servidor no retornó un stream válido');
         return;
       }
 
@@ -261,7 +274,18 @@ export default function ImportPage() {
       let buffer = '';
 
       while (true) {
-        const { done, value } = await reader.read();
+        // Case B: stream cut mid-transfer (network drop, proxy timeout, etc.)
+        let chunk: ReadableStreamReadResult<Uint8Array>;
+        try {
+          chunk = await reader.read();
+        } catch {
+          failWith(
+            'Conexión interrumpida. El servidor puede seguir procesando en segundo plano. Verifica los registros importados.',
+          );
+          return;
+        }
+
+        const { done, value } = chunk;
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
@@ -277,17 +301,19 @@ export default function ImportPage() {
       }
 
       if (!completed) {
-        const msg = 'Conexión interrumpida. Verifica el servidor.';
-        setErrorMessage(msg);
-        setStatus('error');
-        addLog('error', msg);
+        failWith('Conexión interrumpida. Verifica el servidor.');
       }
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') return;
-      const msg = 'Conexión interrumpida. Verifica el servidor.';
-      setErrorMessage(msg);
-      setStatus('error');
-      addLog('error', msg);
+      // Distinguish CORS/network errors (TypeError) from other failures
+      const isCorsOrNetwork =
+        err instanceof TypeError &&
+        (err.message.toLowerCase().includes('fetch') ||
+          err.message.toLowerCase().includes('failed'));
+      const msg = isCorsOrNetwork
+        ? 'Error de conexión con el servidor. Verifica que el backend esté funcionando y que el archivo no sea demasiado grande.'
+        : `Error inesperado: ${err instanceof Error ? err.message : 'desconocido'}`;
+      failWith(msg);
     }
   };
 
@@ -301,8 +327,8 @@ export default function ImportPage() {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const isImporting = status === 'importing';
-  const fileSizeWarning = file && file.size > 1024 * 1024 * 1024; // >1 GB
+  const isImporting = status === 'uploading' || status === 'processing';
+  const fileSizeWarning = file && file.size > 100 * 1024 * 1024; // >100 MB
 
   return (
     <div className="max-w-7xl mx-auto">
@@ -330,11 +356,12 @@ export default function ImportPage() {
             <h2 className="text-sm font-semibold text-slate-300 mb-4">Archivo CSV</h2>
 
             {fileSizeWarning && (
-              <div className="mb-3 p-3 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs flex items-start gap-2">
-                <Info className="h-4 w-4 shrink-0 mt-0.5" />
+              <div className="mb-3 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs flex items-start gap-2">
+                <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
                 <span>
-                  Archivo grande detectado ({formatBytes(file!.size)}). El procesamiento puede
-                  tardar varios minutos. No cierres esta ventana.
+                  Archivo grande ({formatBytes(file!.size)}). El procesamiento puede tardar varios
+                  minutos. <strong className="font-semibold">No cierres esta ventana</strong> hasta
+                  que termine.
                 </span>
               </div>
             )}
@@ -495,10 +522,15 @@ export default function ImportPage() {
             disabled={!file || isImporting}
             className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-6 text-base font-semibold rounded-xl disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {isImporting ? (
+            {status === 'uploading' ? (
               <>
                 <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                Importando...
+                Subiendo archivo...
+              </>
+            ) : status === 'processing' ? (
+              <>
+                <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                Procesando registros...
               </>
             ) : (
               <>
@@ -523,10 +555,16 @@ export default function ImportPage() {
               {/* Status badge */}
               <div className="bg-slate-900 border border-slate-800 rounded-xl px-5 py-4 flex items-center justify-between">
                 <span className="text-sm font-medium text-slate-300">Estado</span>
-                {isImporting && (
+                {status === 'uploading' && (
+                  <span className="flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/10 text-blue-400 text-xs font-semibold">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Subiendo archivo...
+                  </span>
+                )}
+                {status === 'processing' && (
                   <span className="flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 text-amber-400 text-xs font-semibold">
                     <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
-                    Procesando...
+                    Procesando registros...
                   </span>
                 )}
                 {status === 'complete' && (
@@ -554,15 +592,23 @@ export default function ImportPage() {
               {/* Indeterminate progress bar */}
               {isImporting && (
                 <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-                  <div className="flex justify-between items-center mb-2 text-xs text-slate-400">
-                    <span>
-                      {stats.processed.toLocaleString('es-GT')} filas procesadas
-                    </span>
-                    <span>{stats.rate.toLocaleString('es-GT')} filas/seg</span>
-                  </div>
+                  {status === 'uploading' ? (
+                    <p className="text-xs text-blue-400 mb-2 flex items-center gap-1.5">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Subiendo archivo al servidor...
+                    </p>
+                  ) : (
+                    <div className="flex justify-between items-center mb-2 text-xs text-slate-400">
+                      <span>{stats.processed.toLocaleString('es-GT')} filas procesadas</span>
+                      <span>{stats.rate.toLocaleString('es-GT')} filas/seg</span>
+                    </div>
+                  )}
                   <div className="h-2 bg-slate-800 rounded-full overflow-hidden relative">
                     <motion.div
-                      className="absolute top-0 h-full bg-indigo-600 rounded-full"
+                      className={cn(
+                        'absolute top-0 h-full rounded-full',
+                        status === 'uploading' ? 'bg-blue-500' : 'bg-indigo-600',
+                      )}
                       style={{ width: '38%' }}
                       animate={{ left: ['-38%', '140%'] }}
                       transition={{
@@ -573,9 +619,11 @@ export default function ImportPage() {
                       }}
                     />
                   </div>
-                  <p className="text-xs text-slate-500 mt-2">
-                    Tiempo transcurrido: {stats.elapsed}
-                  </p>
+                  {status === 'processing' && (
+                    <p className="text-xs text-slate-500 mt-2">
+                      Tiempo transcurrido: {stats.elapsed}
+                    </p>
+                  )}
                 </div>
               )}
 
