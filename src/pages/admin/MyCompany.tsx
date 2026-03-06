@@ -71,7 +71,9 @@ export default function MyCompanyPage() {
   const { data: myCompany } = useQuery({
     queryKey: ['my-company-me'],
     queryFn: async () => {
-      const r = await api.get('/api/users/me?populate=role,company');
+      const r = await api.get('/api/users/me', {
+        params: { 'populate[0]': 'role', 'populate[1]': 'company' },
+      });
       return r.data.company as Company | null;
     },
     enabled: !isSuperAdmin,
