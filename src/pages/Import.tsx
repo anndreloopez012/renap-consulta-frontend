@@ -18,6 +18,11 @@ import { cn } from '@/lib/utils';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'https://api-info.gts-guatemala.com';
 
+const CHUNK_SIZE = 20 * 1024 * 1024; // 20 MB per chunk
+
+const generateUploadId = () =>
+  `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
 const CSV_COLUMNS = [
   'CUI',
   'PRIMER_NOMBRE',
@@ -94,6 +99,7 @@ export default function ImportPage() {
   const [stats, setStats] = useState<ImportStats>(EMPTY_STATS);
   const [log, setLog] = useState<LogEntry[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
+  const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
 
   const logRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -160,19 +166,14 @@ export default function ImportPage() {
     const controller = new AbortController();
     abortRef.current = controller;
 
-    // Phase 1: uploading (file is being sent to the server)
+    const uploadId = generateUploadId();
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+
     setStatus('uploading');
+    setUploadProgress({ current: 0, total: totalChunks });
     setStats(EMPTY_STATS);
     setLog([]);
     setErrorMessage('');
-
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('delimiter', delimiter);
-    formData.append('encoding', encoding);
-    // NOTE: NO Content-Type header — browser sets it automatically with the correct boundary
-
-    let completed = false;
 
     const failWith = (msg: string) => {
       setErrorMessage(msg);
@@ -180,12 +181,16 @@ export default function ImportPage() {
       setStatus('error');
     };
 
-    const handleEvent = (event: Record<string, unknown>) => {
+    // Tracks whether SSE stream ended cleanly with complete/error
+    let sseCompleted = false;
+
+    const handleSseEvent = (event: Record<string, unknown>) => {
       switch (event.type) {
+        // 'assembling' arrives before 'start' when the server is joining chunks
+        case 'assembling':
         case 'start':
-          // Phase 2: first SSE event received — server is now processing rows
           setStatus('processing');
-          addLog('start', String(event.message ?? 'Importación iniciada'));
+          addLog(String(event.type), String(event.message ?? 'Iniciando procesamiento...'));
           break;
 
         case 'headers': {
@@ -223,58 +228,103 @@ export default function ImportPage() {
           setStats({ processed, inserted, failed, skipped, rate: 0, elapsed });
           addLog('complete', String(event.message ?? 'Importación completada'));
           setStatus('complete');
-          completed = true;
+          sseCompleted = true;
           break;
         }
 
         case 'error': {
           const msg = String(event.message ?? 'Error desconocido');
           failWith(msg);
-          completed = true;
+          sseCompleted = true;
           break;
         }
       }
     };
 
     try {
-      const response = await fetch(`${API_BASE}/api/infos/import`, {
+      // ── PHASE 1: Upload file in 20 MB chunks ──────────────────────────────
+      for (let i = 0; i < totalChunks; i++) {
+        if (controller.signal.aborted) return;
+
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const chunkBlob = file.slice(start, end);
+
+        const formData = new FormData();
+        formData.append('chunk', chunkBlob, `chunk-${i}`);
+        formData.append('uploadId', uploadId);
+        formData.append('chunkIndex', String(i));
+        formData.append('totalChunks', String(totalChunks));
+
+        // Up to 3 attempts per chunk before giving up
+        let retries = 3;
+        while (retries > 0) {
+          try {
+            const res = await fetch(`${API_BASE}/api/infos/import/chunk`, {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${jwt}` },
+              body: formData,
+              signal: controller.signal,
+            });
+
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({})) as Record<string, unknown>;
+              throw new Error(
+                (err?.error as string) ?? `Error ${res.status} al subir fragmento ${i + 1}/${totalChunks}`,
+              );
+            }
+
+            setUploadProgress({ current: i + 1, total: totalChunks });
+            break; // chunk succeeded
+          } catch (err) {
+            if (controller.signal.aborted) return;
+            retries--;
+            if (retries === 0) throw err;
+            await new Promise((r) => setTimeout(r, 2000));
+          }
+        }
+      }
+
+      // ── PHASE 2: Trigger CSV processing — response is SSE ─────────────────
+      addLog('start', 'Todos los fragmentos recibidos. Iniciando procesamiento...');
+      setStatus('processing');
+
+      const processRes = await fetch(`${API_BASE}/api/infos/import/process`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${jwt}` },
-        body: formData,
+        headers: {
+          Authorization: `Bearer ${jwt}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ uploadId, totalChunks, delimiter, encoding }),
         signal: controller.signal,
       });
 
-      // Case A: HTTP error before stream starts (400, 403, 502, 413…)
-      if (!response.ok) {
-        let msg = `Error del servidor (${response.status})`;
-        if (response.status === 502 || response.status === 503) {
-          msg =
-            'El servidor no pudo procesar el archivo. Si el archivo es muy grande, espera un momento y vuelve a intentar.';
-        } else if (response.status === 403) {
+      if (!processRes.ok) {
+        let msg = `Error del servidor (${processRes.status})`;
+        if (processRes.status === 502 || processRes.status === 503) {
+          msg = 'El servidor no pudo procesar el archivo. Espera un momento y vuelve a intentar.';
+        } else if (processRes.status === 403) {
           msg = 'No tienes permisos para importar datos.';
-        } else if (response.status === 413) {
-          msg = 'El archivo es demasiado grande para el servidor.';
         } else {
           try {
-            const data = await response.json();
-            msg = data?.error?.message ?? data?.message ?? msg;
+            const data = await processRes.json() as Record<string, unknown>;
+            msg = (data?.error as string) ?? (data?.message as string) ?? msg;
           } catch {}
         }
         failWith(msg);
         return;
       }
 
-      if (!response.body) {
+      if (!processRes.body) {
         failWith('El servidor no retornó un stream válido');
         return;
       }
 
-      const reader = response.body.getReader();
+      const reader = processRes.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
 
       while (true) {
-        // Case B: stream cut mid-transfer (network drop, proxy timeout, etc.)
         let chunk: ReadableStreamReadResult<Uint8Array>;
         try {
           chunk = await reader.read();
@@ -293,25 +343,24 @@ export default function ImportPage() {
         for (const line of lines) {
           if (line.startsWith('data: ')) {
             try {
-              const event = JSON.parse(line.slice(6));
-              handleEvent(event);
+              const event = JSON.parse(line.slice(6)) as Record<string, unknown>;
+              handleSseEvent(event);
             } catch {}
           }
         }
       }
 
-      if (!completed) {
+      if (!sseCompleted) {
         failWith('Conexión interrumpida. Verifica el servidor.');
       }
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') return;
-      // Distinguish CORS/network errors (TypeError) from other failures
       const isCorsOrNetwork =
         err instanceof TypeError &&
         (err.message.toLowerCase().includes('fetch') ||
           err.message.toLowerCase().includes('failed'));
       const msg = isCorsOrNetwork
-        ? 'Error de conexión con el servidor. Verifica que el backend esté funcionando y que el archivo no sea demasiado grande.'
+        ? 'Error de conexión con el servidor. Verifica que el backend esté funcionando.'
         : `Error inesperado: ${err instanceof Error ? err.message : 'desconocido'}`;
       failWith(msg);
     }
@@ -324,6 +373,7 @@ export default function ImportPage() {
     setStats(EMPTY_STATS);
     setLog([]);
     setErrorMessage('');
+    setUploadProgress({ current: 0, total: 0 });
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -589,40 +639,66 @@ export default function ImportPage() {
                 <StatCard label="Omitidas" value={stats.skipped} variant="yellow" icon="⚠" />
               </div>
 
-              {/* Indeterminate progress bar */}
+              {/* Progress bar */}
               {isImporting && (
                 <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
                   {status === 'uploading' ? (
-                    <p className="text-xs text-blue-400 mb-2 flex items-center gap-1.5">
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                      Subiendo archivo al servidor...
-                    </p>
+                    // Deterministic — we know exactly how many chunks there are
+                    <>
+                      <div className="flex justify-between items-center mb-2 text-xs text-slate-400">
+                        <span>
+                          Subiendo fragmento{' '}
+                          <span className="text-white font-medium">{uploadProgress.current}</span>{' '}
+                          de{' '}
+                          <span className="text-white font-medium">{uploadProgress.total}</span>
+                        </span>
+                        <span className="text-blue-400 font-medium">
+                          {uploadProgress.total > 0
+                            ? Math.round((uploadProgress.current / uploadProgress.total) * 100)
+                            : 0}
+                          %
+                        </span>
+                      </div>
+                      <div className="h-3 bg-slate-800 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                          style={{
+                            width:
+                              uploadProgress.total > 0
+                                ? `${(uploadProgress.current / uploadProgress.total) * 100}%`
+                                : '0%',
+                          }}
+                        />
+                      </div>
+                      <p className="text-xs text-slate-500 mt-2">
+                        Archivo dividido en {uploadProgress.total} fragmentos de 20 MB. No cierres
+                        esta ventana.
+                      </p>
+                    </>
                   ) : (
-                    <div className="flex justify-between items-center mb-2 text-xs text-slate-400">
-                      <span>{stats.processed.toLocaleString('es-GT')} filas procesadas</span>
-                      <span>{stats.rate.toLocaleString('es-GT')} filas/seg</span>
-                    </div>
-                  )}
-                  <div className="h-2 bg-slate-800 rounded-full overflow-hidden relative">
-                    <motion.div
-                      className={cn(
-                        'absolute top-0 h-full rounded-full',
-                        status === 'uploading' ? 'bg-blue-500' : 'bg-indigo-600',
-                      )}
-                      style={{ width: '38%' }}
-                      animate={{ left: ['-38%', '140%'] }}
-                      transition={{
-                        duration: 1.6,
-                        repeat: Infinity,
-                        ease: 'easeInOut',
-                        repeatType: 'mirror',
-                      }}
-                    />
-                  </div>
-                  {status === 'processing' && (
-                    <p className="text-xs text-slate-500 mt-2">
-                      Tiempo transcurrido: {stats.elapsed}
-                    </p>
+                    // Indeterminate — processing rows, total unknown
+                    <>
+                      <div className="flex justify-between items-center mb-2 text-xs text-slate-400">
+                        <span>{stats.processed.toLocaleString('es-GT')} filas procesadas</span>
+                        <span>{stats.rate.toLocaleString('es-GT')} filas/seg</span>
+                      </div>
+                      <div className="h-2 bg-slate-800 rounded-full overflow-hidden relative">
+                        <motion.div
+                          className="absolute top-0 h-full bg-indigo-600 rounded-full"
+                          style={{ width: '38%' }}
+                          animate={{ left: ['-38%', '140%'] }}
+                          transition={{
+                            duration: 1.6,
+                            repeat: Infinity,
+                            ease: 'easeInOut',
+                            repeatType: 'mirror',
+                          }}
+                        />
+                      </div>
+                      <p className="text-xs text-slate-500 mt-2">
+                        Tiempo transcurrido: {stats.elapsed}
+                      </p>
+                    </>
                   )}
                 </div>
               )}
@@ -738,16 +814,18 @@ function StatCard({ label, value, variant, icon }: StatCardProps) {
   );
 }
 
-const LOG_TYPE_CONFIG: Record<string, { icon: string; cls: string }> = {
-  start: { icon: 'i', cls: 'text-blue-400' },
-  headers: { icon: '#', cls: 'text-slate-400' },
-  progress: { icon: '~', cls: 'text-indigo-400' },
-  rowError: { icon: '!', cls: 'text-amber-400' },
-  complete: { icon: 'v', cls: 'text-emerald-400 font-semibold' },
-  error: { icon: 'x', cls: 'text-red-400 font-semibold' },
+const LOG_TYPE_CONFIG: Record<string, { cls: string }> = {
+  assembling: { cls: 'text-blue-400' },
+  start: { cls: 'text-blue-400' },
+  headers: { cls: 'text-slate-400' },
+  progress: { cls: 'text-indigo-400' },
+  rowError: { cls: 'text-amber-400' },
+  complete: { cls: 'text-emerald-400 font-semibold' },
+  error: { cls: 'text-red-400 font-semibold' },
 };
 
 const LOG_ICONS: Record<string, string> = {
+  assembling: 'ℹ',
   start: 'ℹ',
   headers: '▤',
   progress: '≈',
@@ -757,7 +835,7 @@ const LOG_ICONS: Record<string, string> = {
 };
 
 function LogLine({ entry }: { entry: LogEntry }) {
-  const cfg = LOG_TYPE_CONFIG[entry.type] ?? { icon: '·', cls: 'text-slate-400' };
+  const cfg = LOG_TYPE_CONFIG[entry.type] ?? { cls: 'text-slate-400' };
   const icon = LOG_ICONS[entry.type] ?? '·';
 
   return (
