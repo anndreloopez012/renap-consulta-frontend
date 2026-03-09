@@ -67,7 +67,7 @@ export default function Login() {
               <Shield className="h-8 w-8 text-primary" />
               <div className="absolute inset-0 rounded-2xl bg-primary/5 animate-ping" style={{ animationDuration: '3s' }} />
             </div>
-            <h1 className="text-4xl font-extrabold tracking-tight gradient-text">RENAP</h1>
+            <h1 className="text-4xl font-extrabold tracking-tight gradient-text">Consultas PAQ</h1>
             <p className="text-muted-foreground text-sm mt-2 tracking-wide">Sistema de Consulta de Información</p>
           </motion.div>
 
@@ -141,7 +141,7 @@ export default function Login() {
             transition={{ delay: 0.6 }}
             className="text-center text-xs text-muted-foreground/50 mt-6"
           >
-            © {new Date().getFullYear()} RENAP · Todos los derechos reservados
+            © {new Date().getFullYear()} ALCORE-GT · Todos los derechos reservados
           </motion.p>
         </div>
       </motion.div>

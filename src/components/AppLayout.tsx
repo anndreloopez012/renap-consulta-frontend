@@ -75,7 +75,7 @@ export function AppLayout() {
           <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
             <Shield className="h-5 w-5 text-primary" />
           </div>
-          <span className="font-extrabold text-lg tracking-tight gradient-text hidden sm:block">RENAP</span>
+          <span className="font-extrabold text-lg tracking-tight gradient-text hidden sm:block">Consultas PAQ</span>
         </Link>
 
         <div className="flex-1" />
@@ -181,7 +181,7 @@ export function AppLayout() {
                     <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center">
                       <Shield className="h-5 w-5 text-primary" />
                     </div>
-                    <span className="font-extrabold text-lg gradient-text">RENAP</span>
+                    <span className="font-extrabold text-lg gradient-text">Consultas PAQ</span>
                   </div>
                 </div>
                 <nav className="flex-1 py-4 px-3 space-y-1.5">
